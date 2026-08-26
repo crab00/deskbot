@@ -56,7 +56,8 @@ class LlamaServer:
             "--port", str(self.port),
             "-c", str(self.ctx),
             "-t", str(self.threads),
-            "-ngl", "0",               # 纯 CPU，避免 Nano 老 CUDA 崩溃
+            # 0=纯 CPU（Nano 老 CUDA 不可用）；>0=GPU offload（Mac Metal 用 999 全量）
+            "-ngl", str(int(self.cfg.get("llm.n_gpu_layers", 0))),
             "--embeddings",            # 复用本模型做 RAG 嵌入
             "--pooling", "mean",
             "--no-warmup",
@@ -79,13 +80,15 @@ class LlamaServer:
                 f"LLM 模型不存在: {self.model}（先运行 scripts/download_models.sh）")
         if not Path(self._resolve_server(self.server_bin)).exists() and not shutil.which(self.server_bin):
             raise FileNotFoundError(
-                f"找不到 llama-server: {self.server_bin}（先运行 scripts/setup_jetson.sh 构建）")
+                f"找不到 llama-server: {self.server_bin}"
+                "（Mac: brew install llama.cpp 或 scripts/mac-download.sh；Nano: scripts/setup_jetson.sh）")
 
         log.info("启动 llama-server: %s", " ".join(self._args()))
         env = os.environ.copy()
         # 关键：不继承外部 LD_LIBRARY_PATH。否则 shell 里 export 的新版
         # llama 库（如 models/llm/lib）会污染加载，Ubuntu18.04 的
         # GLIBCXX/GLIBC 版本不够直接崩溃。二进制用自己的 RUNPATH 库即可。
+        # （macOS 用 RPATH/DYLD_LIBRARY_PATH，LD_LIBRARY_PATH 是 no-op；勿在此设 DYLD，SIP 会剥离。）
         env.pop("LD_LIBRARY_PATH", None)
         # 1) 配置中显式声明的额外库目录（可选，如 third_party/openssl3）
         lib_dirs = [str(self.cfg.resolve_path(p.strip()))
@@ -158,11 +161,21 @@ class LlamaServer:
 
     @staticmethod
     def _force_kill_port(port: int) -> None:
-        """按 TCP 端口杀掉占用进程（fuser）。用于替换端口上模型不一致的旧服务器。"""
+        """按 TCP 端口杀掉占用进程。用于替换端口上模型不一致的旧服务器。
+
+        macOS 无 fuser，用 lsof 解析 PID 后 kill；Linux 用 fuser。
+        """
         import subprocess
+        import sys
         try:
-            subprocess.run(["fuser", "-k", f"{port}/tcp"],
-                           capture_output=True, timeout=10)
+            if sys.platform == "darwin":
+                r = subprocess.run(["lsof", "-ti", f"tcp:{port}"],
+                                   capture_output=True, text=True, timeout=10)
+                for pid in r.stdout.split():
+                    subprocess.run(["kill", pid], capture_output=True, timeout=5)
+            else:
+                subprocess.run(["fuser", "-k", f"{port}/tcp"],
+                               capture_output=True, timeout=10)
         except Exception:
             pass
 
