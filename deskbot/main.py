@@ -64,6 +64,8 @@ class DeskBot:
         self.cfg = cfg
         self.voice = voice
         self._start_ts = time.time()
+        self.trigger = str(self.cfg.get("trigger", "keyboard")).lower()
+        self._wake_spotter = None
 
         # ---- LLM ----
         from .llm.client import LlmClient
@@ -135,6 +137,8 @@ class DeskBot:
             self.tts = None
         if self.asr is None and self.tts is None:
             self.voice = False
+        if self.voice:
+            self._init_wake()
 
     def _init_vision(self) -> None:
         try:
@@ -209,6 +213,34 @@ class DeskBot:
                 log.warning("Silero VAD 加载失败，降级能量 VAD: %s", e)
         return EnergyVAD()
 
+    def _init_wake(self) -> None:
+        """trigger=wake 时加载唤醒词检测器；失败则降级为常听（无唤醒词）。"""
+        if self.trigger != "wake":
+            return
+        try:
+            from .audio.kws import WakeWordSpotter
+            self._wake_spotter = WakeWordSpotter(
+                self.cfg.path("wake.model_dir"),
+                self.cfg.path("wake.keywords_file"),
+                num_threads=int(self.cfg.get("wake.num_threads", 2)),
+            )
+            log.info("唤醒词模式就绪（%s）", self.cfg.get("wake.keyword", "小桌"))
+        except Exception as e:
+            log.warning("唤醒词加载失败，降级为常听模式: %s", e)
+            self._wake_spotter = None
+
+    def _beep(self, dur: float = 0.15, freq: float = 880.0, sr: int = 16000) -> None:
+        """唤醒提示音（短促正弦波）。listener 线程内同步播放，时长极短。"""
+        if not self.speaker:
+            return
+        try:
+            import numpy as np
+            t = np.arange(int(sr * dur), dtype=np.float32) / sr
+            tone = (0.35 * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+            self.speaker.play(tone, sr)
+        except Exception as e:
+            log.debug("提示音播放失败: %s", e)
+
     # ================= 主循环 =================
     async def run(self) -> None:
         await self.llm_server.start()
@@ -232,7 +264,10 @@ class DeskBot:
         provider = getattr(self.llm, "provider", "local")
         print(f"\n=== Deskbot 就绪（{mode}模式 / LLM: {provider}）===")
         if self.voice:
-            print("直接对着麦克风说话即可；说“退出/再见”结束。\n")
+            if self.trigger == "wake":
+                print(f"喊“{self.cfg.get('wake.keyword', '小桌')}”唤醒后说话；说“退出/再见”结束。\n")
+            else:
+                print("直接对着麦克风说话即可；说“退出/再见”结束。\n")
         else:
             print("输入 '退出' 或 '再见' 结束。\n")
 
@@ -247,7 +282,10 @@ class DeskBot:
         self._seg_q: "asyncio.Queue[np.ndarray]" = asyncio.Queue()
         self._listening = True
         self._start_listener()
-        print("\r🎙️ 聆听中…（直接说话；回答期间继续听，会排队追加）", flush=True)
+        if self.trigger == "wake":
+            print("\r🎙️ 待命中…（喊“小桌”唤醒；回答期间继续听）", flush=True)
+        else:
+            print("\r🎙️ 聆听中…（直接说话；回答期间继续听，会排队追加）", flush=True)
         try:
             while True:
                 seg, vad_ms = await self._seg_q.get()
@@ -275,15 +313,24 @@ class DeskBot:
                 self._listen_thread.join(timeout=2)
 
     def _start_listener(self) -> None:
-        """后台线程：常开麦克风 + VAD，语音片段追加进队列（不打断当前回答）。"""
+        """后台线程：常开麦克风 + VAD，语音片段追加进队列（不打断当前回答）。
+
+        trigger=wake：未唤醒时只跑 KWS；命中唤醒词 → 提示音 + 打开命令窗口，
+        窗口内 VAD 片段正常入队，说完锁回待命，超时回 idle。
+        """
         import threading
 
         loop = asyncio.get_running_loop()
         segmenter = SpeechSegmenter(self._vad(),
                                     after_silence=self.cfg.get("audio.vad_after_silence", 0.8),
                                     max_seconds=self.cfg.get("audio.vad_max_seconds", 20))
+        wake_mode = self.trigger == "wake" and self._wake_spotter is not None
+        wake_timeout = float(self.cfg.get("wake.timeout", 10))
+        woken = False
+        wake_deadline = 0.0
 
         def run() -> None:
+            nonlocal woken, wake_deadline
             try:
                 self.mic.start()
             except Exception as e:
@@ -293,6 +340,24 @@ class DeskBot:
                 block = self.mic.read_block(timeout=0.2)
                 if block is None:
                     continue
+                # 唤醒词模式：未唤醒 → 只跑 KWS，不产 VAD 片段
+                if wake_mode and not woken:
+                    try:
+                        if self._wake_spotter.feed(block):
+                            self._beep()
+                            segmenter.reset()          # 丢弃提示音回声
+                            woken = True
+                            wake_deadline = time.monotonic() + wake_timeout
+                            print("\r🔔 唤醒，请说话…", flush=True)
+                    except Exception as e:
+                        log.warning("KWS 处理异常: %s", e)
+                    continue
+                # 已唤醒超时 → 回 idle
+                if wake_mode and woken and time.monotonic() > wake_deadline:
+                    woken = False
+                    segmenter.reset()
+                    print("\r⏰ 超时，重新待命…", flush=True)
+                    continue
                 try:
                     seg = segmenter.feed(block)
                 except Exception as e:
@@ -301,6 +366,8 @@ class DeskBot:
                 if seg is not None and seg.size >= 1600:  # >=0.1s 视为有效语音
                     loop.call_soon_threadsafe(self._seg_q.put_nowait,
                                               (seg, segmenter.last_seg_ms))
+                    if wake_mode:
+                        woken = False   # 命令说完锁回，需重新唤醒
             self.mic.stop()
 
         self._listen_thread = threading.Thread(target=run, daemon=True)
