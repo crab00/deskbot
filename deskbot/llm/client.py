@@ -47,6 +47,7 @@ class LlmClient:
         self.system_prompt = str(cfg.get("llm.system_prompt", ""))
         self.max_history = int(cfg.get("llm.max_history", 10))
         self.chunk_max = int(cfg.get("llm.chunk_max", _CHUNK_MAX))  # 无标点硬切阈值
+        self.first_chunk_max = int(cfg.get("llm.first_chunk_max", _FIRST_CHUNK_MAX))  # 首块小阈值
         self.history: List[Dict[str, str]] = []
         # 最近一次生成的分段耗时统计（ask_stream 写入，供上层展示）
         self.last_metrics: Dict[str, Optional[float]] = {}
@@ -203,8 +204,8 @@ class LlmClient:
                         buf = buf[matched:]
                         first_chunk = False
                     # 2) 无标点硬切：首块小阈值（保首声快），后续大阈值（合并摊薄开销）
-                    elif len(buf) >= (_FIRST_CHUNK_MAX if first_chunk else self.chunk_max):
-                        n = _FIRST_CHUNK_MAX if first_chunk else self.chunk_max
+                    elif len(buf) >= (self.first_chunk_max if first_chunk else self.chunk_max):
+                        n = self.first_chunk_max if first_chunk else self.chunk_max
                         yield buf[:n].strip()
                         buf = buf[n:]
                         first_chunk = False

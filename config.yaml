@@ -73,6 +73,8 @@ llm:
   context_size: 1024           # 仅嵌入用，够用
   max_tokens: 256              # 线上模型可稍长；语音场景仍由 system_prompt 约束 ≤60字
   max_history: 4               # 线上强模型，恢复多轮对话上下文
+  first_chunk_max: 8           # 首块小阈值（字）：更小=首声更快（Mac TTS 每块开销可忽略）
+  chunk_max: 32                # 无标点硬切阈值（字）：Mac 上长句一次合成更自然
   temperature: 0.7
   host: 127.0.0.1
   port: 8090                   # 与用户已有的 8080 llama-server 隔离

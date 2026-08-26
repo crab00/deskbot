@@ -245,6 +245,14 @@ class DeskBot:
     async def run(self) -> None:
         await self.llm_server.start()
         await self._init_geo()
+        # TTS 预热：触发 jieba/拼音/音素一次性初始化（省首个回答 ~0.5-1s）。
+        # 同步等待，避免与首个真实合成并发竞争同一 OfflineTts 实例。
+        if self.voice and self.tts:
+            try:
+                await to_thread(self.tts.synthesize, "你好。")
+                log.info("TTS 预热完成")
+            except Exception as e:
+                log.warning("TTS 预热失败: %s", e)
         self._banner()
         try:
             if self.voice:
