@@ -281,6 +281,8 @@ class DeskBot:
             return
         self._seg_q: "asyncio.Queue[np.ndarray]" = asyncio.Queue()
         self._listening = True
+        self._current_task: Optional[asyncio.Task] = None
+        self._exit_requested = False
         self._start_listener()
         if self.trigger == "wake":
             print("\r🎙️ 待命中…（喊“小桌”唤醒；回答期间继续听）", flush=True)
@@ -288,7 +290,13 @@ class DeskBot:
             print("\r🎙️ 聆听中…（直接说话；回答期间继续听，会排队追加）", flush=True)
         try:
             while True:
-                seg, vad_ms = await self._seg_q.get()
+                item = await self._seg_q.get()
+                if item is None or self._exit_requested:
+                    break
+                seg, vad_ms = item
+                # 抢话打断：上一轮还在处理时，新语音立即取消它
+                if self.cfg.get("audio.barge_in", True) and self._current_task is not None:
+                    self._barge_in()
                 print(f"\r🎤 检测到语音 {len(seg)/16000:.1f}s，识别中…", flush=True)
                 self._turn_timings = {"vad_ms": vad_ms, "audio_s": len(seg) / 16000}
                 t0 = time.monotonic()
@@ -306,11 +314,43 @@ class DeskBot:
                     print(f"\r（忽略噪声：{text!r}）", flush=True)
                     continue
                 print(f"你说：{text}")
-                await self._handle(text)
+                # 用可取消任务处理（不 await）：循环回到队列等下一片段，
+                # 新语音到达时 _barge_in 会取消本任务实现打断。
+                self._current_task = asyncio.create_task(self._handle_guard(text))
+                self._current_task.add_done_callback(self._clear_task)
         finally:
             self._listening = False
             if getattr(self, "_listen_thread", None):
                 self._listen_thread.join(timeout=2)
+
+    def _barge_in(self) -> None:
+        """打断：停止当前 TTS 播放并取消进行中的回答任务。"""
+        if self.speaker:
+            try:
+                self.speaker.stop()
+            except Exception:
+                pass
+        if self._current_task is not None and not self._current_task.done():
+            self._current_task.cancel()
+
+    async def _handle_guard(self, text: str) -> None:
+        """包装 _handle：吞掉普通异常；放行打断 CancelledError；处理退出。"""
+        try:
+            await self._handle(text)
+        except asyncio.CancelledError:
+            log.info("上一轮回答被新语音打断")
+            raise
+        except KeyboardInterrupt:
+            # "退出/再见"：设标志并投递哨兵唤醒主循环退出
+            self._exit_requested = True
+            if getattr(self, "_seg_q", None) is not None:
+                self._seg_q.put_nowait(None)
+        except Exception as e:
+            log.warning("回答处理异常: %s", e)
+
+    def _clear_task(self, task: asyncio.Task) -> None:
+        if getattr(self, "_current_task", None) is task:
+            self._current_task = None
 
     def _start_listener(self) -> None:
         """后台线程：常开麦克风 + VAD，语音片段追加进队列（不打断当前回答）。
@@ -494,22 +534,27 @@ class DeskBot:
         tts_total = play_total = 0.0
         print("小桌：", end="", flush=True)
         prev = None  # (合成task, 文本) 上一句，用于合成与生成并行
-        while True:
-            sent = await q.get()
-            if sent is None:
-                break
-            parts.append(sent)
-            print(sent, end="", flush=True)
-            # 启动本句合成（后台），同时等待上一句合成完成并播放 → 流水线并行
-            cur = await self._speak_async(sent)
+        try:
+            while True:
+                sent = await q.get()
+                if sent is None:
+                    break
+                parts.append(sent)
+                print(sent, end="", flush=True)
+                # 启动本句合成（后台），同时等待上一句合成完成并播放 → 流水线并行
+                cur = await self._speak_async(sent)
+                if prev is not None:
+                    tts_total, play_total = await self._play_synth(prev[0], tts_total, play_total)
+                prev = cur
             if prev is not None:
                 tts_total, play_total = await self._play_synth(prev[0], tts_total, play_total)
-            prev = cur
-        if prev is not None:
-            tts_total, play_total = await self._play_synth(prev[0], tts_total, play_total)
-        print()
-        answer = "".join(parts).strip()
-        await prod
+            print()
+            answer = "".join(parts).strip()
+            await prod
+        finally:
+            # 被打断时确保取消 LLM 流式 producer，避免后台连接泄漏
+            if not prod.done():
+                prod.cancel()
         self._summarize_timings(tts_total, play_total)
         self._log_conv(user_text, answer, "")
         # 记忆抽取（后台，不增加用户等待）
