@@ -83,11 +83,13 @@ class LlmClient:
                     "均未设置。请 export DEEPSEEK_API_KEY=sk-xxx 或写入 .env")
             self.headers = {"Authorization": f"Bearer {key}"}
             self.model = str(cfg.get("llm.remote_model", "deepseek-chat"))
+            self._trust_env = True   # 远程 API 走系统代理（用户环境可能需要）
             log.info("LLM 提供方: deepseek (%s)", self.model)
         else:
             self.base_url = f"http://{cfg.get('llm.host', '127.0.0.1')}:{cfg.get('llm.port', 8080)}"
             self.headers = {}
             self.model = "deskbot"
+            self._trust_env = False  # 本地 llama-server 不走系统代理
             log.info("LLM 提供方: local llama-server (%s)", self.base_url)
 
     def reset(self) -> None:
@@ -132,7 +134,7 @@ class LlmClient:
             "stream": stream,
         }
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            async with httpx.AsyncClient(timeout=300.0, trust_env=self._trust_env) as client:
                 r = await client.post(f"{self.base_url}/v1/chat/completions",
                                       json=payload, headers=self.headers)
                 r.raise_for_status()
@@ -170,7 +172,7 @@ class LlmClient:
         usage: Optional[dict] = None
         full, buf = "", ""
         first_chunk = True   # 首个非空块用小阈值硬切，保证 TTS 首声快
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=300.0, trust_env=self._trust_env) as client:
             async with client.stream("POST", f"{self.base_url}/v1/chat/completions",
                                      json=payload, headers=self.headers) as r:
                 r.raise_for_status()
@@ -239,7 +241,7 @@ class LlmClient:
             "max_tokens": max_tokens or self.max_tokens,
             "temperature": self.temperature,
         }
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=300.0, trust_env=self._trust_env) as client:
             r = await client.post(f"{self.base_url}/v1/chat/completions",
                                   json=payload, headers=self.headers)
             r.raise_for_status()

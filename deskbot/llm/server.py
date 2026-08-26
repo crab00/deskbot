@@ -121,7 +121,8 @@ class LlamaServer:
 
     async def healthy(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            # trust_env=False：本机 127.0.0.1 不走系统代理（否则 macOS 代理会给 /health 返 502）
+            async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
                 r = await client.get(f"{self.base_url}/health")
                 return r.status_code == 200
         except Exception:
@@ -130,7 +131,7 @@ class LlamaServer:
     async def _served_model(self) -> Optional[str]:
         """询问现有服务器的模型路径（/v1/models）。失败返回 None。"""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
                 r = await client.get(f"{self.base_url}/v1/models")
                 if r.status_code == 200:
                     data = r.json().get("data", [])
@@ -143,7 +144,7 @@ class LlamaServer:
     async def _stop_existing(self) -> None:
         """停掉端口上模型不一致的陈旧 llama-server：先优雅 /shutdown，失败按端口强杀。"""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=5.0, trust_env=False) as client:
                 await client.post(f"{self.base_url}/shutdown")
         except Exception:
             pass

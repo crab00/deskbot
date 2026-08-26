@@ -50,7 +50,8 @@ class LlamaEmbedder:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
         # 每次调用批量嵌入（llama.cpp 支持批量 input）
-        with httpx.Client(timeout=120.0) as client:
+        # trust_env=False：本机 llama-server 不走系统代理
+        with httpx.Client(timeout=120.0, trust_env=False) as client:
             r = client.post(f"{self.base_url}/v1/embeddings",
                             json={"input": texts, "model": "deskbot"})
             r.raise_for_status()
