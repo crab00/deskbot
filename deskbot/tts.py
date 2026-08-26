@@ -30,12 +30,14 @@ class TTSUnavailable(Exception):
 
 class TTS:
     def __init__(self, model_dir: Path, num_threads: int = 2,
-                 speaker_id: int = 0, speed: float = 1.0):
+                 speaker_id: int = 0, speed: float = 1.0,
+                 enable_fst: bool = False):
         if not _HAS_SHERPA:
             raise TTSUnavailable("未安装 sherpa-onnx")
         self.model_dir = Path(model_dir)
         self.speaker_id = speaker_id
         self.speed = speed
+        self.enable_fst = enable_fst
         self._tts = self._build(num_threads)
 
     def _build(self, num_threads: int):
@@ -68,9 +70,22 @@ class TTS:
                 lexicon=lex, dict_dir=ddict, data_dir=ddir)
             model_cfg = sherpa_onnx.OfflineTtsModelConfig(vits=vits_cfg, num_threads=num_threads)
 
+        # FST 规则（date/number/phone/new_heteronym）——数字/日期读准。
+        # Nano CPU 上前处理极慢故默认关；Mac 上 enable_fst=true 开启。
+        rule_fsts = ""
+        if self.enable_fst:
+            fsts = [str(p) for p in sorted(self.model_dir.glob("*.fst"))]
+            if fsts:
+                rule_fsts = ",".join(fsts)
+                log.info("加载 FST 规则: %s", rule_fsts)
+
+        kwargs = {}
+        if rule_fsts:
+            kwargs["rule_fsts"] = rule_fsts
         try:
-            config = sherpa_onnx.OfflineTtsConfig(model=model_cfg)
+            config = sherpa_onnx.OfflineTtsConfig(model=model_cfg, **kwargs)
         except TypeError:
+            # 旧版 sherpa-onnx 无 rule_fsts 参数，回退不加载 FST
             config = sherpa_onnx.OfflineTtsConfig(model=model_cfg)
 
         log.info("加载 TTS（%s → %s）", self.model_dir, model.name)
