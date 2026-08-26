@@ -1,7 +1,7 @@
 # ============================================================
-# Deskbot 主配置（Mac / Apple Silicon）
+# Deskbot 主配置
 # 所有路径相对本文件所在目录（项目根）。
-# Jetson Nano 部署请用 config.nano.yaml（--config config.nano.yaml）。
+# 部署到 Jetson Nano 后：~/deskbot/config.yaml
 # ============================================================
 
 # 路径
@@ -13,16 +13,9 @@ paths:
   memories: data/memories
   datasets: data/datasets
 
-# 触发方式：wake（唤醒词，免按键）或 keyboard（按 Enter，最稳）
-trigger: wake
-
-# 唤醒词（trigger: wake 时生效）
-wake:
-  keyword: "小桌"                    # 唤醒词；短词命中不稳可改"你好小智"
-  model_dir: models/kws/wenetspeech-3.3M   # sherpa-onnx KWS 中文模型
-  keywords_file: models/kws/keywords.txt   # pinyin token 关键词表（text2token 生成）
-  timeout: 10                       # 唤醒后多久没说话回 idle（s）
-  num_threads: 2
+# 触发方式：keyboard（按 Enter 开始说话，默认，最稳）
+# 可选：wake（唤醒词，需配置 openWakeWord 模型，M5）
+trigger: keyboard
 
 # 麦克风/扬声器
 audio:
@@ -31,28 +24,26 @@ audio:
   sample_rate: 16000         # ASR 用 16k mono
   channels: 1
   vad_enabled: true
-  barge_in: true             # 抢话打断：说话即停当前 TTS，立即处理新语音
   # 说话前导静音（s）与尾静音（s）：判定一个完整语音片段
   vad_before_silence: 0.3
   vad_after_silence: 0.8
   vad_max_seconds: 20        # 单次语音最长录制时长
-  no_speech_timeout: 10      # 唤醒/按键后多久没说话就提示重来（s）
+  no_speech_timeout: 10      # 按 Enter 后多久没说话就提示重来（s）
 
 # ASR（sherpa-onnx SenseVoice，中文效果最佳）
 asr:
   enabled: true
   engine: sense_voice           # auto / paraformer / sense_voice
   model_dir: models/asr/sense-voice-zh   # 内含 model.int8.onnx / tokens.txt
-  num_threads: 4                # M4 多核；SenseVoice 走 onnxruntime CPU
+  num_threads: 2
 
-# TTS（sherpa-onnx VITS-zh，多说话人 + FST 数字/日期读准）
+# TTS（sherpa-onnx VITS-zh）
 tts:
   enabled: true
-  model_dir: models/tts/vits-zh-ll   # 多说话人 VITS（音质好）；Mac 上合成快，无需再用 piper
+  model_dir: models/tts/vits-piper-xiao_ya/vits-piper-zh_CN-xiao_ya-medium-int8   # piper int8（快，合成1.6-3.9s）；vits-zh-ll 备选（音质好但慢 6-13s）
   speaker_id: 0
-  speed: 1.0                    # 语速；Mac 合成够快，无需提速补偿
-  num_threads: 4                # 合成线程数：M4 上更多线程缩短合成墙钟时间
-  enable_fst: true              # 加载 *.fst 规则（date/number/phone/new_heteronym），数字日期读准
+  speed: 1.15             # 语速：Nano 实测 1.0→1.3 合成-20%/播放-20%（缓解滞后）；想更慢回 1.0
+  num_threads: 2           # 合成线程数：Nano 实测 2 线程比 1 快 22%，保持 2
 
 # LLM 提供方：deepseek（线上 API）或 local（本地 llama-server，回退用）
 # provider=deepseek 时用线上模型做生成；本地 llama-server 仍保留做 RAG 嵌入
@@ -63,19 +54,18 @@ llm:
   api_base: https://api.deepseek.com
   remote_model: deepseek-chat
   # 以下为本地 llama-server（RAG 嵌入用）：
-  server_path: /opt/homebrew/bin/llama-server   # Mac 用 Homebrew llama.cpp（自带 Metal）；或 third_party/llama-server.osx-arm64
+  server_path: /home/crab/llm/llama.cpp-latest/build-cpu/bin/llama-server
   # 若换用需要额外动态库的二进制（如 conda 版需 libssl.so.3），在此填目录。
-  # 留空 = 清空子进程 LD_LIBRARY_PATH，让二进制用自带 RUNPATH 库（macOS 用 RPATH，此项无实际作用）。
+  # 留空 = 清空子进程 LD_LIBRARY_PATH，让二进制用自带 RUNPATH 库。
   lib_paths: ""
   model: models/llm/Qwen3-0.6B-Q4_K_M.gguf   # 仅本地嵌入用（Qwen3-0.6B，1024 维）
-  n_gpu_layers: 999            # Metal 全量 offload（-ngl 999）；Nano 用 0 走纯 CPU
-  num_threads: 8               # M4 多核
-  context_size: 1024           # 仅嵌入用，够用
-  max_tokens: 256              # 线上模型可稍长；语音场景仍由 system_prompt 约束 ≤60字
-  max_history: 4               # 线上强模型，恢复多轮对话上下文
-  temperature: 0.7
+  num_threads: 4            # A57 四核全用
+  context_size: 1024        # 语音问答上下文够用，减小 KV 缓存省内存
+  max_tokens: 256           # 线上模型可稍长；语音场景仍由 system_prompt 约束 ≤60字
+  max_history: 4            # 线上强模型，恢复多轮对话上下文
+  temperature: 0.7          # 线上模型稳定
   host: 127.0.0.1
-  port: 8090                   # 与用户已有的 8080 llama-server 隔离
+  port: 8090                 # 与用户已有的 8080 llama-server 隔离
   # 系统提示词（prompt_tuner 可能会追加 learned_rules）
   # 注意：LLM 走线上 DeepSeek，不做"无法联网"约束；实时/网络信息由模型正常作答。
   system_prompt: |
