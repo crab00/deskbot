@@ -67,7 +67,7 @@ llm:
   # 若换用需要额外动态库的二进制（如 conda 版需 libssl.so.3），在此填目录。
   # 留空 = 清空子进程 LD_LIBRARY_PATH，让二进制用自带 RUNPATH 库（macOS 用 RPATH，此项无实际作用）。
   lib_paths: ""
-  model: models/llm/Qwen3-0.6B-Q4_K_M.gguf   # 仅本地嵌入用（Qwen3-0.6B，1024 维）
+  model: models/llm/Qwen3-0.6B-Q8_0.gguf    # 仅本地嵌入用（Qwen3-0.6B，1024 维）
   n_gpu_layers: 999            # Metal 全量 offload（-ngl 999）；Nano 用 0 走纯 CPU
   num_threads: 8               # M4 多核
   context_size: 1024           # 仅嵌入用，够用

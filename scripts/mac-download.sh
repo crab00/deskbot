@@ -67,9 +67,10 @@ else
 fi
 
 # Qwen3-0.6B：Mac 端本地嵌入模型（RAG 用，embed_dim 1024；比 1.5B 小/快）
-Q3_OUT="$MODELS/llm/Qwen3-0.6B-Q4_K_M.gguf"
-Q3_MS="https://modelscope.cn/models/Qwen/Qwen3-0.6B-GGUF/resolve/master/qwen3-0.6b-q4_k_m.gguf"
-Q3_HF="https://hf-mirror.com/Qwen/Qwen3-0.6B-GGUF/resolve/main/qwen3-0.6b-q4_k_m.gguf"
+# 官方 Qwen/Qwen3-0.6B-GGUF 仅提供 Q8_0 量化（无 Q4_K_M）。
+Q3_OUT="$MODELS/llm/Qwen3-0.6B-Q8_0.gguf"
+Q3_MS="https://modelscope.cn/models/Qwen/Qwen3-0.6B-GGUF/resolve/master/Qwen3-0.6B-Q8_0.gguf"
+Q3_HF="https://hf-mirror.com/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf"
 if [ ! -f "$Q3_OUT.ok" ]; then
   fetch "Qwen3-0.6B(ModelScope)" "$Q3_MS" "$Q3_OUT" || fetch "Qwen3-0.6B(hf-mirror)" "$Q3_HF" "$Q3_OUT"
   touch "$Q3_OUT.ok"
@@ -216,7 +217,7 @@ fi
 echo
 echo "=== 下载结果 ==="
 MISS=0
-for f in "$MODELS/llm/Qwen3-0.6B-Q4_K_M.gguf" \
+for f in "$MODELS/llm/Qwen3-0.6B-Q8_0.gguf" \
          "$MODELS/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf" \
          "$MODELS/asr/sense-voice-zh/tokens.txt" \
          "$MODELS/tts/vits-zh-ll/model.onnx" \
