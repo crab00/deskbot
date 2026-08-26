@@ -5,11 +5,13 @@
 # 网络方案（全部直连，不用代理 —— 实测代理反而更慢）：
 #   - Qwen GGUF      → ModelScope（国内，主），hf-mirror（备）
 #   - ASR/TTS 模型   → hf-mirror（sherpa 官方 HF 仓库）
-#   - llama-server   → conda-forge 预编译 linux-aarch64 CPU 版（免编译）
+#   - llama-server   → conda-forge 预编译 linux-aarch64 CPU 版（Nano，免编译）
+#   - llama-server   → macOS 用 Homebrew（brew install llama.cpp，自带 Metal）
+#   - KWS 唤醒词模型 → GitHub release（k2-fsa/sherpa-onnx，走 gh 代理）
 #   - Silero/YOLO    → 先试 hf-mirror，失败退 GitHub 代理（文件小，可接受）
 #
 # 用法：./scripts/mac-download.sh
-# 产物：models/ + third_party/llama-server.linux-aarch64
+# 产物：models/（含 Qwen3-0.6B 嵌入模型、KWS）+ third_party/llama-server.linux-aarch64
 # ============================================================
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -64,7 +66,18 @@ else
   echo "  [跳过] Qwen1.5B 已就绪"
 fi
 
-echo "== 2/6 ASR: SenseVoice-zh（默认，中文效果最佳，hf-mirror）=="
+# Qwen3-0.6B：Mac 端本地嵌入模型（RAG 用，embed_dim 1024；比 1.5B 小/快）
+Q3_OUT="$MODELS/llm/Qwen3-0.6B-Q4_K_M.gguf"
+Q3_MS="https://modelscope.cn/models/Qwen/Qwen3-0.6B-GGUF/resolve/master/qwen3-0.6b-q4_k_m.gguf"
+Q3_HF="https://hf-mirror.com/Qwen/Qwen3-0.6B-GGUF/resolve/main/qwen3-0.6b-q4_k_m.gguf"
+if [ ! -f "$Q3_OUT.ok" ]; then
+  fetch "Qwen3-0.6B(ModelScope)" "$Q3_MS" "$Q3_OUT" || fetch "Qwen3-0.6B(hf-mirror)" "$Q3_HF" "$Q3_OUT"
+  touch "$Q3_OUT.ok"
+else
+  echo "  [跳过] Qwen3-0.6B 已就绪"
+fi
+
+echo "== 2/8 ASR: SenseVoice-zh（默认，中文效果最佳，hf-mirror）=="
 ASR_DIR="$MODELS/asr/sense-voice-zh"
 mkdir -p "$ASR_DIR"
 [ ! -f "$ASR_DIR/.ok" ] && {
@@ -90,7 +103,7 @@ mkdir -p "$PARA_DIR"
   touch "$PARA_DIR/.ok"
 } || echo "  [跳过] Paraformer 已就绪"
 
-echo "== 3/6 TTS: VITS-zh（多说话人，hf-mirror 逐文件）=="
+echo "== 3/8 TTS: VITS-zh（多说话人，hf-mirror 逐文件）=="
 TTS_DIR="$MODELS/tts/vits-zh-ll"
 TTS_REPO="csukuangfj/sherpa-onnx-vits-zh-ll"
 hf_file() { # hf_file <repo> <remote> <local>
@@ -117,11 +130,11 @@ fi
 
 # VAD: 用 sherpa-onnx 官方的 silero_vad.onnx（x/h/c 格式，经测试可靠）。
 # 不要用 snakers4/silero-vad 的 v5 导出（带 sr 输入，且有坏 LSTM 分支）。
-echo "== 4/6 VAD: Silero（sherpa 官方版，~628KB）=="
+echo "== 4/8 VAD: Silero（sherpa 官方版，~628KB）=="
 fetch "Silero VAD(sherpa)" "https://gh-proxy.com/https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx" \
   "$MODELS/vad/silero_vad.onnx"
 
-echo "== 5/6 视觉: YOLOv8n（~13MB，可选，失败不阻塞）=="
+echo "== 5/8 视觉: YOLOv8n（~13MB，可选，失败不阻塞）=="
 if [ ! -f "$MODELS/vision/yolov8n.onnx.ok" ]; then
   # 快速尝试两个版本号，都失败就跳过（M5 视觉可选）
   for tag in v8.3.0 v8.2.0 v8.1.0; do
@@ -137,7 +150,7 @@ else
   echo "  [跳过] YOLOv8n 已就绪"
 fi
 
-echo "== 6/6 llama-server 预编译二进制（conda-forge linux-aarch64 CPU，.conda 格式）=="
+echo "== 6/8 llama-server 预编译二进制（conda-forge linux-aarch64 CPU，.conda 格式，Nano 用）=="
 LLAMA_PKG="third_party/llama.cpp.conda"
 LLAMA_BIN="third_party/llama-server.linux-aarch64"
 if [ ! -x "$LLAMA_BIN" ] || [ ! -d "$ROOT/third_party/llama-server-libs" ]; then
@@ -163,15 +176,54 @@ else
   echo "  [跳过] llama-server 已就绪"
 fi
 
+echo "== 7/8 llama-server for macOS（darwin-arm64, Metal）=="
+if command -v llama-server >/dev/null 2>&1; then
+  echo "  [跳过] 已检测到 llama-server: $(command -v llama-server)"
+  echo "         请确保 config.yaml 的 llm.server_path 指向它（Homebrew 默认 /opt/homebrew/bin/llama-server）"
+elif command -v brew >/dev/null 2>&1; then
+  echo "  未检测到 llama-server。请运行： brew install llama.cpp（自带 Metal）"
+  echo "  装好后 config.yaml 的 llm.server_path 设为 $(brew --prefix llama.cpp)/bin/llama-server"
+else
+  echo "  未检测到 Homebrew。请安装 Homebrew 后： brew install llama.cpp，"
+  echo "  或从 https://github.com/ggml-org/llama.cpp/releases 下载 macos-arm64 构建解包到 third_party/。"
+fi
+
+echo "== 8/8 KWS 唤醒词模型（WenetSpeech，中文，~20MB）=="
+KWS_DIR="$MODELS/kws/wenetspeech-3.3M"
+if [ ! -f "$KWS_DIR/tokens.txt" ]; then
+  mkdir -p "$KWS_DIR"
+  KWS_TARBALL="$MODELS/kws/wenetspeech.tar.bz2"
+  KWS_URL="$(ghurl "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2")"
+  fetch "KWS-WenetSpeech" "$KWS_URL" "$KWS_TARBALL"
+  tar -xjf "$KWS_TARBALL" -C "$KWS_DIR" --strip-components=1
+  echo "  已解包 KWS 模型 → $KWS_DIR"
+else
+  echo "  [跳过] KWS 模型已就绪"
+fi
+
+# 生成 keywords.txt（pinyin token；需已装 sherpa-onnx）
+if [ -f "$KWS_DIR/tokens.txt" ] && [ ! -f "$MODELS/kws/keywords.txt" ]; then
+  KW="${WAKE_KEYWORD:-小桌}"
+  if command -v sherpa-onnx-cli >/dev/null 2>&1; then
+    sherpa-onnx-cli text2token --tokens "$KWS_DIR/tokens.txt" --tokens-type ppinyin "$KW" > "$MODELS/kws/keywords.txt"
+    echo "  已生成 keywords.txt（关键词: $KW）"
+  else
+    echo "  未检测到 sherpa-onnx-cli，跳过 keywords.txt 生成。装好后运行："
+    echo "    sherpa-onnx-cli text2token --tokens $KWS_DIR/tokens.txt --tokens-type ppinyin \"$KW\" > models/kws/keywords.txt"
+  fi
+fi
+
 echo
 echo "=== 下载结果 ==="
 MISS=0
-for f in "$MODELS/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf" \
-         "$MODELS/asr/paraformer-zh/tokens.txt" \
+for f in "$MODELS/llm/Qwen3-0.6B-Q4_K_M.gguf" \
+         "$MODELS/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf" \
+         "$MODELS/asr/sense-voice-zh/tokens.txt" \
          "$MODELS/tts/vits-zh-ll/model.onnx" \
          "$MODELS/vad/silero_vad.onnx" \
+         "$MODELS/kws/wenetspeech-3.3M/tokens.txt" \
          "$ROOT/third_party/llama-server.linux-aarch64"; do
   if [ -s "$f" ]; then echo "  ✓ $f ($(du -h "$f" | cut -f1))"; else echo "  ✗ 缺失 $f"; MISS=1; fi
 done
-[ "$MISS" = "0" ] && echo "全部就绪！接着运行： ./scripts/dev-sync.sh crab@192.168.31.202"
+[ "$MISS" = "0" ] && echo "模型就绪！Mac 端还需 brew install llama.cpp（Metal）；Nano 部署： ./scripts/dev-sync.sh crab@192.168.31.202"
 exit "$MISS"
