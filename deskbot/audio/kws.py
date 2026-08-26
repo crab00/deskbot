@@ -80,10 +80,9 @@ class WakeWordSpotter:
         while self._spotter.is_ready(self._stream):
             self._spotter.decode_stream(self._stream)
             r = self._spotter.get_result(self._stream)
-            if r:
-                kw = getattr(r, "keyword", None)
+            if r:  # get_result 返回 str（关键词文本），非空即命中
                 self._spotter.reset_stream(self._stream)  # 命中后必须重置
-                return kw
+                return str(r)
         return None
 
     def reset(self) -> None:
