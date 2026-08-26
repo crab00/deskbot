@@ -17,6 +17,7 @@ rsync -avz --progress \
   --exclude '.venv-train/' \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
+  --exclude 'config.yaml' \
   ./ "$DEST"
 
 echo "完成。接下来在 Nano 上："
