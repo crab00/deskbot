@@ -1,0 +1,28 @@
+# Deskbot 运行依赖（Jetson Nano aarch64）
+# 安装：pip install -r requirements.txt
+# 说明：llama.cpp 与模型文件由 scripts/ 单独处理，不在此安装
+
+# 核心运行时
+# 注意：Nano 是 aarch64 + Python 3.8，部分包需锁版本才能拿到预编译轮子
+numpy>=1.21,<2          # numpy 2.x 需要 py3.9+
+PyYAML>=6.0
+httpx>=0.24
+
+# 音频（麦克风采集 / 扬声器播放，底层走 PortAudio）
+sounddevice>=0.4.6      # 无 aarch64 轮子时走源码编译（需 portaudio19-dev）
+
+# 语音识别与合成（ASR/TTS，sherpa-onnx 纯离线；1.13.x 有 cp38 aarch64 轮子）
+sherpa-onnx>=1.10
+
+# VAD（Silero，onnxruntime 加载 onnx 模型）
+# onnxruntime 1.18+ 不再提供 cp38 aarch64 轮子，锁 <1.18
+onnxruntime>=1.14,<1.18
+
+# 向量嵌入：复用本地 llama-server 的 /v1/embeddings 接口，无需额外依赖
+
+# 视觉（可选，M5；用 onnx 推理 yolov8n，避免在 Nano 上装 torch）
+# opencv 4.10+ 不再提供 cp38 aarch64 轮子，锁 <4.10
+opencv-python-headless>=4.8,<4.10
+
+# 开发/测试
+pytest>=7.0

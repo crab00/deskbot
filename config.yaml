@@ -1,0 +1,114 @@
+# ============================================================
+# Deskbot 主配置
+# 所有路径相对本文件所在目录（项目根）。
+# 部署到 Jetson Nano 后：~/deskbot/config.yaml
+# ============================================================
+
+# 路径
+paths:
+  root: .                    # 项目根（config.yaml 所在目录）
+  models: models
+  logs: data/logs
+  feedback: data/feedback
+  memories: data/memories
+  datasets: data/datasets
+
+# 触发方式：keyboard（按 Enter 开始说话，默认，最稳）
+# 可选：wake（唤醒词，需配置 openWakeWord 模型，M5）
+trigger: keyboard
+
+# 麦克风/扬声器
+audio:
+  mic_device: null           # 数字设备名；null 用默认设备
+  speaker_device: null
+  sample_rate: 16000         # ASR 用 16k mono
+  channels: 1
+  vad_enabled: true
+  # 说话前导静音（s）与尾静音（s）：判定一个完整语音片段
+  vad_before_silence: 0.3
+  vad_after_silence: 0.8
+  vad_max_seconds: 20        # 单次语音最长录制时长
+  no_speech_timeout: 10      # 按 Enter 后多久没说话就提示重来（s）
+
+# ASR（sherpa-onnx SenseVoice，中文效果最佳）
+asr:
+  enabled: true
+  engine: sense_voice           # auto / paraformer / sense_voice
+  model_dir: models/asr/sense-voice-zh   # 内含 model.int8.onnx / tokens.txt
+  num_threads: 2
+
+# TTS（sherpa-onnx VITS-zh）
+tts:
+  enabled: true
+  model_dir: models/tts/vits-piper-xiao_ya/vits-piper-zh_CN-xiao_ya-medium-int8   # piper int8（快，合成1.6-3.9s）；vits-zh-ll 备选（音质好但慢 6-13s）
+  speaker_id: 0
+  speed: 1.15             # 语速：Nano 实测 1.0→1.3 合成-20%/播放-20%（缓解滞后）；想更慢回 1.0
+  num_threads: 2           # 合成线程数：Nano 实测 2 线程比 1 快 22%，保持 2
+
+# LLM 提供方：deepseek（线上 API）或 local（本地 llama-server，回退用）
+# provider=deepseek 时用线上模型做生成；本地 llama-server 仍保留做 RAG 嵌入
+# （DeepSeek 无嵌入 API），所以 host/port/model 仍需配置。
+llm:
+  provider: deepseek            # deepseek | local
+  api_key_env: DEEPSEEK_API_KEY # provider=deepseek 时从该环境变量读 API key
+  api_base: https://api.deepseek.com
+  remote_model: deepseek-chat
+  # 以下为本地 llama-server（RAG 嵌入用）：
+  server_path: /home/crab/llm/llama.cpp-latest/build-cpu/bin/llama-server
+  # 若换用需要额外动态库的二进制（如 conda 版需 libssl.so.3），在此填目录。
+  # 留空 = 清空子进程 LD_LIBRARY_PATH，让二进制用自带 RUNPATH 库。
+  lib_paths: ""
+  model: models/llm/Qwen3-0.6B-Q4_K_M.gguf   # 仅本地嵌入用（Qwen3-0.6B，1024 维）
+  num_threads: 4            # A57 四核全用
+  context_size: 1024        # 语音问答上下文够用，减小 KV 缓存省内存
+  max_tokens: 256           # 线上模型可稍长；语音场景仍由 system_prompt 约束 ≤60字
+  max_history: 4            # 线上强模型，恢复多轮对话上下文
+  temperature: 0.7          # 线上模型稳定
+  host: 127.0.0.1
+  port: 8090                 # 与用户已有的 8080 llama-server 隔离
+  # 系统提示词（prompt_tuner 可能会追加 learned_rules）
+  # 注意：LLM 走线上 DeepSeek，不做"无法联网"约束；实时/网络信息由模型正常作答。
+  system_prompt: |
+    你是桌面语音助手机器人"小桌"。请直接、简洁地回答用户的问题。回答不超过60字，不用Markdown。
+
+# RAG 个人记忆库
+rag:
+  enabled: true
+  # 嵌入方式：复用本地 llama-server 的 /v1/embeddings（零额外模型）
+  # embed_dim 需与本地大模型的 hidden size 一致（Qwen3-0.6B=1024 / Qwen2.5-1.5B=1536 / 0.5B=896）
+  embedding_model: llama
+  embed_dim: 1024
+  top_k: 4                  # 每次问答检索几条记忆
+  max_memory_chars: 400     # 拼入 prompt 的记忆总长度上限
+  # 每轮对话后抽取记忆
+  memory_extract_enabled: true
+  memory_collection: deskbot_memories
+
+# 优化闭环
+optimize:
+  enabled: true
+  feedback_keywords_good: ["回答很好", "回答不错", "很好", "答对了", "记住了", "对"]
+  feedback_keywords_bad:  ["回答不对", "回答错误", "错了", "不对", "错误", "蠢"]
+  memory_keywords:         ["记住", "你要记住", "记住了吗", "我是", "我喜欢", "我叫"]
+  # 规则自改进（prompt_tuner）
+  prompt_tune_enabled: true
+  rules_file: data/rules.yaml
+  changelog_file: data/changelog.jsonl
+  eval_set: data/datasets/eval_set.jsonl
+  eval_report: data/datasets/eval_report.jsonl
+
+# 视觉（M5，可选）
+vision:
+  enabled: false
+  camera_index: 0
+  model: models/vision/yolov8n.onnx
+  # 检测结果注入 LLM 的开关与阈值
+  inject_on_ask: true       # 用户问"桌上有什么"时自动拍照检测
+  confidence: 0.35
+  num_classes: 80
+
+# 日志
+logging:
+  level: INFO               # DEBUG 可查看更细流水线日志
+  console: true
+  file: data/logs/deskbot.log

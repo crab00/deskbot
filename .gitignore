@@ -1,0 +1,35 @@
+# 模型文件（大，不入 git）
+models/
+*.gguf
+*.onnx
+*.tar.bz2
+*.zip
+
+# 运行数据
+data/logs/*
+data/feedback/*
+data/datasets/*
+!data/datasets/eval_set.jsonl
+data/memories/*
+data/changelog.jsonl
+data/rules.yaml
+
+# 密钥（代码会读 PROJECT_ROOT/.env，绝不能入库）
+.env
+.env.*
+
+# 第三方部署产物（可被 mac-download.sh 重建，不入 git）
+third_party/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+.venv-*/
+venv/
+.pytest_cache/
+
+# 杂项
+.DS_Store
+*.log
