@@ -21,7 +21,8 @@ wake:
   keyword: "小桌"                    # 唤醒词；短词命中不稳可改"你好小智"
   model_dir: models/kws/wenetspeech-3.3M   # sherpa-onnx KWS 中文模型
   keywords_file: models/kws/keywords.txt   # pinyin token 关键词表（text2token 生成）
-  timeout: 10                       # 唤醒后多久没说话回 idle（s）
+  timeout: 10                       # 唤醒后多久没说话回 idle（s，旧字段，回退用）
+  conversation_timeout: 30          # 会话超时：唤醒后持续对话，静默超过此时长才重新待命（s）
   num_threads: 2
 
 # 麦克风/扬声器
@@ -49,7 +50,7 @@ asr:
 tts:
   enabled: true
   model_dir: models/tts/vits-zh-ll   # 多说话人 VITS（音质好）；Mac 上合成快，无需再用 piper
-  speaker_id: 0
+  speaker_id: 2                # 音色：内置 5 个（0-4），用户试听选定 2
   speed: 1.0                    # 语速；Mac 合成够快，无需提速补偿
   num_threads: 4                # 合成线程数：M4 上更多线程缩短合成墙钟时间
   enable_fst: true              # 加载 *.fst 规则（date/number/phone/new_heteronym），数字日期读准

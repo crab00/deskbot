@@ -377,12 +377,15 @@ class DeskBot:
                                     after_silence=self.cfg.get("audio.vad_after_silence", 0.8),
                                     max_seconds=self.cfg.get("audio.vad_max_seconds", 20))
         wake_mode = self.trigger == "wake" and self._wake_spotter is not None
-        wake_timeout = float(self.cfg.get("wake.timeout", 10))
+        # 会话超时（s）：唤醒后持续可说话，静默超过该时长（且无回答在播）才回待命
+        session_timeout = float(self.cfg.get("wake.conversation_timeout",
+                                             self.cfg.get("wake.timeout", 30)))
         woken = False
-        wake_deadline = 0.0
+        in_session = False
+        session_deadline = 0.0
 
         def run() -> None:
-            nonlocal woken, wake_deadline
+            nonlocal woken, in_session, session_deadline
             try:
                 self.mic.start()
             except Exception as e:
@@ -399,16 +402,22 @@ class DeskBot:
                             self._beep()
                             segmenter.reset()          # 丢弃提示音回声
                             woken = True
-                            wake_deadline = time.monotonic() + wake_timeout
+                            in_session = True
+                            session_deadline = time.monotonic() + session_timeout
                             print("\r🔔 唤醒，请说话…", flush=True)
                     except Exception as e:
                         log.warning("KWS 处理异常: %s", e)
                     continue
-                # 已唤醒超时 → 回 idle
-                if wake_mode and woken and time.monotonic() > wake_deadline:
+                # 会话超时 → 回待命（回答播放中不超时，续期等待）
+                if wake_mode and in_session and time.monotonic() > session_deadline:
+                    cur = getattr(self, "_current_task", None)
+                    if cur is not None and not cur.done():
+                        session_deadline = time.monotonic() + session_timeout
+                        continue
+                    in_session = False
                     woken = False
                     segmenter.reset()
-                    print("\r⏰ 超时，重新待命…", flush=True)
+                    print("\r⏰ 长时间未说话，重新待命…", flush=True)
                     continue
                 try:
                     seg = segmenter.feed(block)
@@ -419,7 +428,8 @@ class DeskBot:
                     loop.call_soon_threadsafe(self._seg_q.put_nowait,
                                               (seg, segmenter.last_seg_ms))
                     if wake_mode:
-                        woken = False   # 命令说完锁回，需重新唤醒
+                        # 说话续期：持续对话不需重新唤醒
+                        session_deadline = time.monotonic() + session_timeout
             self.mic.stop()
 
         self._listen_thread = threading.Thread(target=run, daemon=True)
