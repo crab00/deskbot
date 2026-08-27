@@ -692,6 +692,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--export", action="store_true", help="导出训练集")
     p.add_argument("--memory-add", default=None, metavar="TEXT", help="直接记住一句话")
     p.add_argument("--say", default=None, metavar="TEXT", help="合成并播报一句话")
+    p.add_argument("--dialogue", action="store_true", help="自动化对话考核（文字层）")
     return p
 
 
@@ -706,6 +707,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.eval:
         bot = DeskBot(cfg, voice=False)
         asyncio.run(_run_eval(bot))
+        return
+    if args.dialogue:
+        asyncio.run(_run_dialogue(cfg))
         return
     if args.tune:
         bot = DeskBot(cfg, voice=False)
@@ -756,6 +760,18 @@ async def _run_tune(bot) -> None:
               f"回滚: {report.get('rolled_back', False)}")
     finally:
         await bot.llm_server.stop()
+
+
+async def _run_dialogue(cfg) -> None:
+    """自动化对话考核（文字层，不依赖音频/TTS）。"""
+    from .optimize.dialogue import run_dialogue
+    report = await run_dialogue(cfg)
+    for d in report["details"]:
+        mark = "✓" if d["passed"] else "✗"
+        scope = f" [{d.get('notes')}]" if d.get("notes") else ""
+        print(f"{mark} {d['name']}: {d.get('expected', '')}{scope}")
+    print(f"\n对话考核: {report['passed']}/{report['total']} 通过 ({report['score']:.0%})"
+          f"，基线 {report['baseline_passed']}")
 
 
 if __name__ == "__main__":
