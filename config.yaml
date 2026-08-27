@@ -53,6 +53,14 @@ tts:
   speed: 1.0                    # 语速；Mac 合成够快，无需提速补偿
   num_threads: 4                # 合成线程数：M4 上更多线程缩短合成墙钟时间
   enable_fst: true              # 加载 *.fst 规则（date/number/phone/new_heteronym），数字日期读准
+  # 多音字静态消歧：把正确注音词条启动时追加进 lexicon（sherpa 无热重载，故一次写入）。
+  # 只覆盖"上下文无关"多音字词；lexicon 已有正确词条的（如"音乐"）不需加。
+  # piper 无 lexicon 自动跳过。
+  polyphone:
+    enabled: true
+    entries:
+      "归还": "ㄏ ㄨ ㄢ ˊ"
+      "行李": "ㄒ ㄧ ㄥ ˊ ㄌ ㄧ ˙"
 
 # LLM 提供方：deepseek（线上 API）或 local（本地 llama-server，回退用）
 # provider=deepseek 时用线上模型做生成；本地 llama-server 仍保留做 RAG 嵌入

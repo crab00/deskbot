@@ -127,11 +127,15 @@ class DeskBot:
             self.asr = None
         try:
             from .tts import TTS
+            poly_entries = None
+            if self.cfg.get("tts.polyphone.enabled", False):
+                poly_entries = self.cfg.get("tts.polyphone.entries", {}) or {}
             self.tts = TTS(self.cfg.path("tts.model_dir"),
                            num_threads=int(self.cfg.get("tts.num_threads", 2)),
                            speaker_id=int(self.cfg.get("tts.speaker_id", 0)),
                            speed=float(self.cfg.get("tts.speed", 1.0)),
-                           enable_fst=bool(self.cfg.get("tts.enable_fst", False)))
+                           enable_fst=bool(self.cfg.get("tts.enable_fst", False)),
+                           poly_entries=poly_entries)
         except Exception as e:
             log.warning("TTS 加载失败，语音输出不可用: %s", e)
             self.tts = None

@@ -31,13 +31,15 @@ class TTSUnavailable(Exception):
 class TTS:
     def __init__(self, model_dir: Path, num_threads: int = 2,
                  speaker_id: int = 0, speed: float = 1.0,
-                 enable_fst: bool = False):
+                 enable_fst: bool = False,
+                 poly_entries: Optional[dict] = None):
         if not _HAS_SHERPA:
             raise TTSUnavailable("未安装 sherpa-onnx")
         self.model_dir = Path(model_dir)
         self.speaker_id = speaker_id
         self.speed = speed
         self.enable_fst = enable_fst
+        self.poly_entries = poly_entries
         self._tts = self._build(num_threads)
 
     def _build(self, num_threads: int):
@@ -49,10 +51,9 @@ class TTS:
 
         # 可选的 lexicon / dict / FST。VITS/piper 加载 dict（jieba 分词）；piper 不需 dict。
         # FST 规则在 Nano CPU 上前处理极慢（日期带FST 11s vs 不带 3.7s）→ 不加载。
-        lexicon = self.model_dir / "lexicon.txt"
         dict_dir = self.model_dir / "dict"
         data_dir = self.model_dir / "espeak-ng-data"
-        lex = str(lexicon) if lexicon.exists() else ""
+        lex = self._resolve_lexicon()
         ddict = str(dict_dir) if dict_dir.is_dir() else ""
         ddir = str(data_dir) if data_dir.is_dir() else ""
 
@@ -90,6 +91,34 @@ class TTS:
 
         log.info("加载 TTS（%s → %s）", self.model_dir, model.name)
         return sherpa_onnx.OfflineTts(config)
+
+    def _resolve_lexicon(self) -> str:
+        """lexicon 路径解析：若配置了多音字词表且模型有 lexicon.txt，
+        生成扩展后的会话级临时 lexicon 并返回其路径；否则返回原 lexicon。
+        sherpa 无热重载（lexicon 在 OfflineTts 构造时固定），故启动时一次写入。
+        """
+        lexicon = self.model_dir / "lexicon.txt"
+        if not lexicon.exists():
+            return ""
+        if not self.poly_entries:
+            return str(lexicon)
+        try:
+            from .tts_poly import PolyphoneResolver
+            resolver = PolyphoneResolver(self.poly_entries)
+            if not resolver.can_support(self.model_dir):
+                return str(lexicon)
+            tokens_txt = self.model_dir / "tokens.txt"
+            base = lexicon.read_text(encoding="utf-8")
+            augmented = resolver.augment_lexicon(base, tokens_txt)
+            if augmented == base:
+                return str(lexicon)
+            tmp = self.model_dir / "lexicon.session.txt"
+            tmp.write_text(augmented, encoding="utf-8")
+            log.info("多音字词表已扩展 lexicon → %s", tmp)
+            return str(tmp)
+        except Exception as e:
+            log.warning("多音字词表扩展失败，用原始 lexicon: %s", e)
+            return str(lexicon)
 
     def synthesize(self, text: str) -> Tuple[np.ndarray, int]:
         """合成中文语音，返回 (float32 波形, 采样率)。"""
