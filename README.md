@@ -1,103 +1,125 @@
-# Deskbot — Jetson Nano 本地语音 AI 桌面机器人
+# Deskbot — 桌面语音 AI 机器人
 
-把一台 **Jetson Nano（4GB）** 变成能对话的桌面机器人：麦克风提问 → 本地大模型回答 → 扬声器播报，完全离线；并内置「持续优化」闭环（记忆、反馈、规则自改进、微调）。
+唤醒即用的桌面语音助手：喊「小桌」→ 说话 → 云端大模型回答 → 扬声器播报。支持**免唤醒连续对话**、**抢话打断**、**多音字正确读音**、**长期记忆**与**优化闭环**。
+
+> 同一套代码跑在 **macOS Apple Silicon（Mac，主）** 与 **Jetson Nano（Nano，保持可用）** 上。LLM 生成走 DeepSeek 线上 API，本地 llama-server 只做 RAG 嵌入。
 
 ## 架构
 
 ```
-[麦克风] → VAD → ASR(sherpa-onnx Paraformer) → [RAG 记忆检索] → LLM(llama.cpp+Qwen1.5B) → TTS(sherpa-onnx VITS) → [扬声器]
-                                                    ↑                                                        ↓
-                                         [摄像头] → YOLO 物体描述              [优化闭环] → 反馈/记忆/评估/微调
+[麦克风] → VAD(静音检测) → ASR(SenseVoice) → [RAG 记忆检索] → LLM(DeepSeek) → TTS(VITS/piper) → [扬声器]
+    ↑                          ↑                                                  ↑
+[唤醒词 KWS]（trigger=wake）  [免唤醒会话超时]                              [多音字消歧]
 ```
+
+- **触发方式**：唤醒词「小桌」或键盘（config `trigger: wake|keyboard`）
+- **持续对话**：唤醒后无需每次重喊，静默超过 `conversation_timeout` 才重新待命
+- **打断**：回答播放中直接说话即打断（barge-in）
+- **LLM**：DeepSeek（`deepseek-chat`）线上生成；本地 Qwen3-0.6B 仅作 RAG 嵌入（1024 维）
+- **RAG**：对话记忆向量检索，最新记忆优先注入（时间加权）
+- **优化闭环**：记忆 / 反馈 / 规则自改进 / 评估 / 对话考核
 
 ## 快速开始
 
-```bash
-# 1) 在 Jetson Nano 上一键部署（Python≥3.8、依赖、llama.cpp、模型、swap）
-./scripts/setup_jetson.sh
+### Mac（Apple Silicon，主）
 
-# 2) 冒烟测试（验证各模块）
-source .venv/bin/activate
+```bash
+# 1) 环境（sherpa-onnx 1.13.6 / onnxruntime / sounddevice；brew 装 llama.cpp + portaudio）
+python3 -m venv .venv-mac && source .venv-mac/bin/activate
+pip install -e .[mac]
+bash scripts/mac-download.sh            # 下载模型（SenseVoice/VITS/KWS/VAD/嵌入）
+
+# 2) 冒烟测试
 python -m deskbot.main --smoke
 
-# 3) 键盘问答（无音频，先跑通逻辑）
-python -m deskbot.main --text
-
-# 4) 语音问答（接好 USB 麦克风+扬声器）
-python -m deskbot.main --voice
+# 3) 语音问答（配好 USB 麦克风）
+python -m deskbot.main --voice          # 喊「小桌」唤醒，连续对话免唤醒
 ```
 
-开发机(Mac)改完代码后同步到 Nano：
+### Jetson Nano（保持可用）
 
 ```bash
-./scripts/dev-sync.sh crab@192.168.31.202   # 或直接 ./scripts/dev-sync.sh
+./scripts/setup_jetson.sh               # 一键部署（venv/依赖/模型/swap）
+./scripts/dev-sync.sh crab@192.168.31.202   # 从 Mac 同步代码（排除 config.yaml）
+# Nano 用自己的 config.yaml（keyboard 触发 + piper TTS + CPU 推理）
 ```
 
 ## 常用命令
 
 | 命令 | 作用 |
 |---|---|
-| `python -m deskbot.main --voice` | 语音问答（按 Enter 后说话） |
-| `python -m deskbot.main --text` | 键盘问答 |
-| `python -m deskbot.main --smoke` | 冒烟测试 |
-| `python -m deskbot.main --eval` | 跑评估集并打分 |
+| `python -m deskbot.main --voice` | 语音问答（唤醒词「小桌」+ 免唤醒连续对话） |
+| `python -m deskbot.main --text` | 键盘问答（无音频，调试） |
+| `python -m deskbot.main --smoke` | 冒烟测试（LLM/记忆/反馈/导出） |
+| `python -m deskbot.main --eval` | 评估集打分（当前 21/22, 96%） |
+| `python -m deskbot.main --dialogue` | 自动化对话考核（12 场景文字层断言） |
 | `python -m deskbot.main --tune` | 规则自改进（扫描反馈→调 prompt→回归） |
 | `python -m deskbot.main --export` | 导出微调训练集 |
-| `python -m deskbot.main --memory-add "我喜欢喝咖啡"` | 直接记住一句话 |
+| `python -m deskbot.main --memory-add "..."` | 直接记住一句话 |
 | `python -m deskbot.main --say "你好"` | 仅合成播报一句话 |
 
-## 持续优化闭环
+## 核心能力
 
-```
-对话日志 ──→ 记忆抽取 ──→ RAG 向量库（下次回答自动用）
-    │
-    └──→ 用户反馈(语音"回答很好/不对"或文字) ──→ 优质数据
-            ├─→ 规则自改进：--tune 自动提炼规则→注入 prompt→评估回归→失败回滚
-            └─→ 训练集导出：--export → 离机 QLoRA 微调 → 部署 + 评估对比
-```
+### 免唤醒连续对话（会话超时）
+- 喊「小桌」唤醒后，**持续对话无需再唤醒**；每说一句话自动续期
+- 静默超过 `wake.conversation_timeout`（默认 30s）且无回答在播 → 回到待命
+- 小桌回答播放期间**不计入静默**（回答中续期）
 
-### 微调流程（离机，需带独显的 PC 或云 GPU）
+### 抢话打断（barge-in）
+- 回答播放中直接说话 → 立即停止 TTS + 取消当前回答任务，处理新语音
 
-```bash
-# 1) Nano 上导出数据
-python -m deskbot.main --export
-# 2) 把 data/datasets/train.jsonl 传到 GPU 机器
-scp data/datasets/train.jsonl user@gpu-host:~/
-# 3) GPU 机器上微调（产物为 Q4_K_M GGUF）
-./scripts/fine_tune.sh train.jsonl
-# 4) 回传 Nano 并部署（自动评估对比，分数低可回滚）
-./scripts/deploy_model.sh models/llm/finetuned/model.gguf
-```
+### 多音字正确读音（静态消歧）
+- sherpa-onnx 的 text→phoneme 在 C++ 内部（jieba 分词 → lexicon 查音），单字多音字默认音易读错
+- `deskbot/tts_poly.py` 在启动时把正确注音（Zhuyin）词条追加进 lexicon，让 jieba 匹配整词读对
+- 已修复：归还/还价/地壳/解数/亲家/中意/着重/目的/的确/行李
+- piper（Nano）无 lexicon 自动跳过
+
+### 长期记忆 + 优化闭环
+- 说「记住我喜欢吃火锅」→ 直接入库；后续回答自动用（RAG 检索 + 时间加权）
+- 反馈（"回答很好/不对"）→ 规则自改进 → 评估回归
+- 离机微调：`--export` → GPU 机 `fine_tune.sh` → `deploy_model.sh`
 
 ## 配置
 
-所有配置在 `config.yaml`：
-- `llm.model` / `llm.system_prompt`：模型路径与人格
-- `rag.*`：记忆库（嵌入模型、检索条数）
-- `optimize.*`：反馈关键词、规则/变更记录文件、评估集
-- `audio.*` / `asr.*` / `tts.*`：音频、识别、合成
-- `vision.*`：摄像头与 YOLO
+所有配置在 `config.yaml`（Mac）与 `config.nano.yaml`（Nano）：
+
+| 段 | 关键项 |
+|---|---|
+| `trigger` / `wake` | 触发方式、唤醒词、会话超时 |
+| `audio` | 麦克风/扬声器设备、VAD、barge_in |
+| `asr` | SenseVoice 模型、线程数 |
+| `tts` | 模型目录、音色 `speaker_id`、FST、多音字消歧 `polyphone` |
+| `llm` | DeepSeek provider、API key、本地嵌入 server |
+| `rag` | 向量库维度、检索条数、记忆抽取 |
+| `optimize` | 反馈关键词、评估集、规则文件 |
+| `vision` | 视觉（默认关闭，需 YOLO 模型） |
 
 ## 目录
 
 ```
 deskbot/
-├── deskbot/               # 主代码
-│   ├── main.py            # 入口与流水线编排
-│   ├── audio/             # 麦克风 / VAD / 扬声器
-│   ├── asr.py tts.py      # 语音识别 / 合成（sherpa-onnx）
-│   ├── llm/               # llama.cpp server 管理 + 客户端
+├── deskbot/
+│   ├── main.py            # 入口、唤醒/会话状态机、_handle 分支
+│   ├── audio/             # 麦克风 / VAD / 唤醒词 KWS / 扬声器(打断)
+│   ├── asr.py tts.py      # SenseVoice 识别 / VITS 合成
+│   ├── tts_poly.py        # 多音字静态消歧
+│   ├── geo.py             # 位置（口述优先 + IP 兜底）
+│   ├── llm/               # llama-server 管理 + OpenAI 兼容客户端
 │   ├── rag/               # 嵌入 / 向量库 / 记忆
-│   ├── vision/            # 摄像头 / YOLO 检测
-│   └── optimize/          # 反馈 / 规则自改进 / 评估 / 数据集
-├── scripts/               # 部署 / 同步 / 微调 / 发布脚本
-├── data/                  # 运行数据（日志 / 反馈 / 记忆 / 数据集）
+│   ├── optimize/          # 反馈 / 规则自改进 / 评估 / 对话考核 / 数据集
+│   ├── vision/            # 摄像头 / YOLO 检测（默认关）
+│   └── utils/             # 配置 / 日志 / 状态
+├── scripts/               # 部署 / 同步 / 下载 / 微调
+├── data/                  # 日志 / 反馈 / 记忆 / 数据集 / 评估报告
 └── models/                # 模型文件（脚本下载）
 ```
 
+## 技术文档
+
+详见 [docs/TECHNICAL.md](docs/TECHNICAL.md)：架构细节、模块职责、关键设计、已知坑、配置对照。
+
 ## 注意事项
 
-- **性能**：Nano 4GB 上 1.5B Q4 推理约 3~8 token/s，回答已限制 256 token；CPU 推理最稳（CUDA 10.2 过旧）。
-- **内存**：建议 4GB swap（setup 脚本已配置）；ASR/TTS 模型按需加载。
-- **供电散热**：满负载务必 5V/4A 直流供电 + 散热风扇。
-- **模型下载**：需要联网一次；嵌入模型由 fastembed 首次运行时下载。
+- **Mac**：需 USB 麦克风（蓝牙耳机拾音增益过低不可用）；系统代理开着时本地 llama-server 调用走 `trust_env=False`（见技术文档坑列表）。
+- **Nano**：CPU 推理，TTS 合成是延迟瓶颈；GPU 不可行（CUDA 10.2 过旧）。
+- **模型**：`.env` 配 `DEEPSEEK_API_KEY`；模型文件不入 git，用脚本下载。
