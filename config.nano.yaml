@@ -37,14 +37,15 @@ asr:
   model_dir: models/asr/sense-voice-zh   # 内含 model.int8.onnx / tokens.txt
   num_threads: 2
 
-# TTS（sherpa-onnx VITS-zh）
+# TTS（sherpa-onnx）
 tts:
   enabled: true
-  model_dir: models/tts/vits-piper-xiao_ya/vits-piper-zh_CN-xiao_ya-medium-int8   # piper int8（快，合成1.6-3.9s）；vits-zh-ll 备选（音质好但慢 6-13s）
+  model_dir: models/tts/matcha-icefall-zh-baker   # matcha（RPi4 RTF 0.39，音质好于 piper）；piper/vits 备选
   speaker_id: 0
-  speed: 1.15             # 语速：Nano 实测 1.0→1.3 合成-20%/播放-20%（缓解滞后）；想更慢回 1.0
-  num_threads: 2           # 合成线程数：Nano 实测 2 线程比 1 快 22%，保持 2
-  # 多音字消歧：piper 用 pinyin 前端无 lexicon.txt，静态词表不适用 → 显式关闭。
+  speed: 1.0              # matcha 合成快（Mac RTF 0.03），Nano 视实测再提速
+  num_threads: 2           # 合成线程数：Nano 实测 2 线程比 1 快 22%
+  # 多音字消歧：matcha 用 pinyin 前端，其 lexicon.txt 已自带归还/行李等 9/10 词条（唯一缺"中意"），
+  # 且 Zhuyin 静态词表（tts_poly）不适用 pinyin token → 保持关闭。piper 同样无需。
   polyphone:
     enabled: false
 

@@ -46,19 +46,29 @@ asr:
   model_dir: models/asr/sense-voice-zh   # 内含 model.int8.onnx / tokens.txt
   num_threads: 4                # M4 多核；SenseVoice 走 onnxruntime CPU
 
-# TTS（sherpa-onnx VITS-zh，多说话人 + FST 数字/日期读准）
+# TTS 引擎：qwen3（首选，Apple Silicon MLX，自然中文/英文）| sherpa（Kokoro/VITS/Matcha/piper）
 tts:
   enabled: true
-  model_dir: models/tts/vits-zh-ll   # 多说话人 VITS（音质好）；Mac 上合成快，无需再用 piper
-  speaker_id: 2                # 音色：内置 5 个（0-4），用户试听选定 2
-  speed: 1.0                    # 语速；Mac 合成够快，无需提速补偿
-  num_threads: 4                # 合成线程数：M4 上更多线程缩短合成墙钟时间
-  enable_fst: true              # 加载 *.fst 规则（date/number/phone/new_heteronym），数字日期读准
+  engine: qwen3                 # Mac 主选 Qwen3-TTS（mlx-audio Python 参考实现）；sherpa 走 model_dir 的模型
+  # --- qwen3 引擎（engine: qwen3）---
+  # 用 unpruned mlx-community 8bit 版（稳定）；pruned-vocab 变体在 Swift/Python 推理都不稳定
+  model_dir: models/tts/qwen3-8bit   # 仓库内（mac-download.sh §3d 下载目标；相对根路径，重装可用）
+  speaker: Vivian               # 说话人（CustomVoice）；Vivian/Ryan/Aiden/Chelsie 中文可听
+  language: zh                 # 'zh'/'en'/'auto'
+  # --- sherpa 引擎（engine: sherpa）---
+  # model_dir: models/tts/kokoro-multi-lang-v1_0   # Kokoro v1.0（82M，24kHz，53 音色）；或 vits-zh-ll / matcha
+  # speaker_id: 45              # Kokoro 中文女声（0-52）。试听：--say "你好" --say-speaker <id>
+  speed: 1.0                    # sherpa 语速；Kokoro 合成 RTF~0.3，无需提速
+  num_threads: 4                # sherpa 合成线程数
+  enable_fst: false
+  # 注：多音字静态消歧（polyphone）仅对 VITS/Matcha（lexicon.txt 体系）生效。
+  # Kokoro 中文前端用拼音+jieba 原生消歧，更强，无需本表。切回 VITS 时自动恢复启用。
   # 多音字静态消歧：把正确注音词条启动时追加进 lexicon（sherpa 无热重载，故一次写入）。
   # 只覆盖"上下文无关"多音字词；lexicon 已有正确词条的（如"音乐"）不需加。
-  # piper 无 lexicon 自动跳过。新增词条：ASR 回环验证确认读错后加入。
+  # piper 无 lexicon 自动跳过；Kokoro 走拼音+jieba 原生消歧，本表对其无效（保留 entries，
+  # 切回 VITS/Matcha 时把 enabled 改回 true 即可自动恢复）。
   polyphone:
-    enabled: true
+    enabled: false
     entries:
       "归还": "ㄏ ㄨ ㄢ ˊ"
       "行李": "ㄒ ㄧ ㄥ ˊ ㄌ ㄧ ˙"

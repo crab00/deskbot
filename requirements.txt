@@ -12,7 +12,8 @@ httpx>=0.24
 sounddevice>=0.4.6      # 无 aarch64 轮子时走源码编译（需 portaudio19-dev）
 
 # 语音识别与合成（ASR/TTS，sherpa-onnx 纯离线；1.13.x 有 cp38 aarch64 轮子）
-sherpa-onnx>=1.10
+# Kokoro 模型需 sherpa-onnx >= 1.10.23（1.13.x 稳定支持）
+sherpa-onnx>=1.13
 
 # VAD（Silero，onnxruntime 加载 onnx 模型）
 # onnxruntime 1.18+ 不再提供 cp38 aarch64 轮子，锁 <1.18

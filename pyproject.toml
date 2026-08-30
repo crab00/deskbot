@@ -8,7 +8,7 @@ dependencies = [
     "PyYAML>=6.0",
     "httpx>=0.24",
     "sounddevice>=0.4.6",
-    "sherpa-onnx>=1.10",
+    "sherpa-onnx>=1.13",
     "onnxruntime>=1.14",
     "fastembed>=0.3",
 ]
@@ -21,7 +21,7 @@ dev = ["pytest>=7.0"]
 mac = [
     "numpy>=2.0",
     "onnxruntime>=1.17",
-    "sherpa-onnx>=1.10",
+    "sherpa-onnx>=1.13",
     "sounddevice>=0.4.6",
     "opencv-python-headless>=4.8",
 ]

@@ -41,9 +41,9 @@
 | | Mac (config.yaml) | Nano (config.nano.yaml) |
 |---|---|---|
 | 触发 | wake「小桌」 | keyboard |
-| TTS | vits-zh-ll + FST + speaker 2 | piper int8 (speed 1.15) |
+| TTS | **Qwen3-TTS**（mlx-audio，24kHz，最自然）；Kokoro `engine: sherpa` 可选 | **matcha-zh-baker**（合成 2.4s/句，RTF 0.69 实测） |
 | 嵌入 | llama-server Metal (ngl 999) | llama-server CPU |
-| 多音字消歧 | 启用 | piper 无 lexicon 跳过 |
+| 多音字消歧 | VITS/Matcha 启用（lexicon.txt 体系）；Kokoro 走拼音原生消歧 / Qwen3 无需 | matcha pinyin 前端 lexicon 自带，Zhuyin 词表不适用 → 关 |
 | 麦克风 | USB（蓝牙不可用） | USB |
 
 代码改动用**安全默认**隔离（缺失配置键自动取缺省），因此同一代码可跑双平台。`scripts/dev-sync.sh` 排除 `config.yaml`，防止 Mac 配置覆盖 Nano。
@@ -169,7 +169,38 @@ python -m deskbot.main --dialogue  # 12/12 对话考核
 
 ## 8. 后续方向（未实现）
 
-- **换更大 TTS 模型**：`vits-zh-hf-fanchen-C`（187 音色，drop-in）或 Kokoro（更自然但改代码路径）。
-- **语音换音色命令**：拦截"换个音色/音色N号"，运行时改 `self.tts.speaker_id`（`generate` 每调传 sid，即时生效，无需重建）。
+- **vits-zh-hf-fanchen-C**：187 音色 VITS，drop-in（改 `tts.model_dir` + `speaker_id`）。音质好但 Nano CPU RTF 1.6-4.3 → 慢，仅在 Mac 可选。
+- **语音换音色命令**：拦截"换个音色/音色N号"，运行时改 `self.tts.speaker_id`（`generate` 每调传 sid，即时生效，无需重建）。试听工具已就绪：`--say "你好" --say-speaker <id>`。
 - **视觉 M5**：`vision.enabled` 默认关，YOLO 模型未下载；代码完整待启用。
 - **M4 微调**：`finetune_lora.py` + `fine_tune.sh` 已写但 train.jsonl 样本不足。
+
+## 9. TTS 模型矩阵与决策记录
+
+| 模型 | 音质 | 采样率 | 权重 | Mac RTF | Nano CPU | 结论 |
+|---|---|---|---|---|---|---|
+| **Qwen3-TTS-0.6B**（mlx-audio） | ⭐⭐⭐⭐⭐ 最自然 | 24kHz | ~1.3GB(8bit) | RTF ~0.5（Apple Silicon 实测） | — | **Mac 主用**（`tts.engine: qwen3`），常驻 Python 子进程 |
+| **Kokoro v1.0**（zh+en） | ⭐⭐⭐ | 24kHz | ~81MB onnx | ~0.3 | RTF 3-8（不可行） | Mac 备选（`engine: sherpa`），53 音色 |
+| **VITS-zh-ll** | ⭐⭐ | 16kHz | ~115MB | ~0.25 | 6-13s/句 | Mac 兜底 / Nano 慢 |
+| **piper xiao_ya int8** | ⭐ | 16kHz | ~100MB | — | 1.6-3.9s/句 | Nano 现状，最快 |
+| **matcha-icefall-zh-baker** | ⭐⭐⭐ | 22.05kHz | ~96MB + vocoder 52MB | RTF 0.03（Mac 实测） | **RTF 0.69 实测**（A57，合成 2.4s/句，加载 9.1s） | **Nano 主用**，drop-in（`tts.py` Matcha 分支已修复 vocoder） |
+
+**Nano GPU（Maxwell 128 核）结论：不追。** 原因：sherpa-onnx TTS 走自编译的 onnxruntime CPU C API，无 Python 钩子切 GPU provider；CUDA 10.2 无配套 aarch64 wheel（sherpa-onnx CUDA 在 Nano 实测不可运行）；换 onnxruntime-gpu 只影响 ORTC 路径，理论增益 ~1.3-1.8x 不抵安装风险。
+
+### Qwen3-TTS（Mac）接入说明
+
+- **运行时**：Python `mlx-audio` 0.4.3 参考实现（mlx Metal），Apple Silicon 专属，Nano 不可用。
+  > 起初用官方 Swift 移植（`AtomGradient/swift-qwen3-tts`）——其 AR 生成有 bug：官方 `Qwen3TTSDemo`
+  > 与本项目服务在任意型号/语言/采样下都产出**退化解码音频**（常 6s 满帧、无 EOS、87% 削波）。
+  > 已定位为 Swift 移植的 AR 循环问题，改为 Python 参考实现后稳定（干净语音、时长随文本合理、0% 削波）。
+- **模型**：必须用 **unpruned 版本** `mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit`。
+  > `AtomGradient/*-pruned-vocab-lite` 在 Swift/Python 两种推理路径都不稳定（同句时长 0.9-5s 漂移、
+  > 偶发空输出）。unpruned-8bit 在 `mlx-audio.tts.utils.load(strict=False)` 下稳定（实测同句 2.7-3.7s）。
+- **后端**：`deskbot/tts_qwen3.py` 常驻子进程（`subprocess.Popen` + stdin/stdout 行协议），
+  `deskbot/tts_qwen3_server.py` 在独立 venv（Python 3.11 + mlx-audio 0.4.3）跑，模型只加载一次（~1.6s）。
+  解释器路径：`QWEN3_PYTHON` 环境变量，或默认 `~/projects/deskbot-mlx-audio/.venv/bin/python`。
+- **配置**：`tts.engine: qwen3`（Mac 默认）+ `tts.speaker`（Vivian/Ryan/Aiden 等 CustomVoice 音色）+ `tts.language: zh`。
+- **集成**：server 输出 WAV → Python 读回 → `Speaker.play`。`--say` / 预热 / barge-in 全走同一 `synthesize()` 接口。
+
+### Matcha vocoder 修复（相对上个版本）
+
+`sherpa-onnx` 的 `OfflineTtsMatchaModelConfig` **必须**传 `vocoder`（如 `vocos-22khz-univ.onnx`，官网单独下载放模型目录 `vocoder-*.onnx`）。旧 `tts.py` 的 Matcha 分支漏传导致 TypeError——已修复。

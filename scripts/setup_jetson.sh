@@ -100,6 +100,8 @@ check "$ROOT/models/asr/sense-voice-zh/model.int8.onnx"
 check "$ROOT/models/tts/vits-zh-ll/model.onnx"
 check "$ROOT/models/tts/vits-zh-ll/tokens.txt"
 check "$ROOT/models/tts/vits-zh-ll/lexicon.txt"
+check "$ROOT/models/tts/matcha-icefall-zh-baker/model-steps-3.onnx"
+check "$ROOT/models/tts/matcha-icefall-zh-baker/vocoder-vocos.onnx"
 check "$ROOT/models/vad/silero_vad.onnx"
 if [ "$MISSING" = "1" ]; then
   echo "⚠️  有模型缺失，请先在 Mac 上运行 scripts/mac-download.sh 再同步。"

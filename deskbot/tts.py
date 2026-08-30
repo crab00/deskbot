@@ -53,23 +53,57 @@ class TTS:
         # FST 规则在 Nano CPU 上前处理极慢（日期带FST 11s vs 不带 3.7s）→ 不加载。
         dict_dir = self.model_dir / "dict"
         data_dir = self.model_dir / "espeak-ng-data"
-        lex = self._resolve_lexicon()
         ddict = str(dict_dir) if dict_dir.is_dir() else ""
         ddir = str(data_dir) if data_dir.is_dir() else ""
 
-        # Matcha-TTS：文件名形如 model-steps-3.onnx，用 OfflineTtsMatchaModelConfig
-        # （注意 OfflineTtsModelConfig 的字段是 vits= / matcha=，不是 model=）
-        if "steps" in model.name or "matcha" in model.name.lower():
-            log.info("加载 Matcha-TTS（%s）", model.name)
-            mcfg = sherpa_onnx.OfflineTtsMatchaModelConfig(
-                acoustic_model=str(model), tokens=str(tokens),
-                lexicon=lex, dict_dir=ddict, data_dir=ddir)
-            model_cfg = sherpa_onnx.OfflineTtsModelConfig(matcha=mcfg, num_threads=num_threads)
+        # Kokoro：目录含 voices.bin 即判定（VITS/Matcha/piper 均无此文件）。
+        # 多说话人 boxed-voice 模型，lexicon 是逗号分隔多文件（lexicon-us-en.txt,lexicon-zh.txt），
+        # 且需 espeak-ng-data（文本归一化）。中文前端用拼音+jieba 原生消歧，不走 lexicon.txt
+        # 多音字词表（跳过 _resolve_lexicon）。
+        voices = self.model_dir / "voices.bin"
+        if voices.exists():
+            if not (self.model_dir / "espeak-ng-data").is_dir():
+                log.warning("Kokoro 模型缺 espeak-ng-data/，中文文本归一化可能异常")
+            # 只取 us-en + zh：中文前端用拼音+zh 词表；gb-en 与 us-en 大量重复且无中文词，
+            # 一起传会触发 C++ 端 "Duplicated word" 去重日志噪音。
+            lex_list = [str(p) for p in sorted(self.model_dir.glob("lexicon-*-en.txt"))
+                        if "gb-" not in p.name] + [str(self.model_dir / "lexicon-zh.txt")]
+            lex_str = ",".join(p for p in lex_list if Path(p).exists())
+            kokoro_cfg = sherpa_onnx.OfflineTtsKokoroModelConfig(
+                model=str(model), voices=str(voices), tokens=str(tokens),
+                lexicon=lex_str, data_dir=ddir, dict_dir=ddict)
+            model_cfg = sherpa_onnx.OfflineTtsModelConfig(kokoro=kokoro_cfg, num_threads=num_threads)
+            log.info("加载 Kokoro（%s，lexicon=%s）", self.model_dir, lex_str)
         else:
-            vits_cfg = sherpa_onnx.OfflineTtsVitsModelConfig(
-                model=str(model), tokens=str(tokens),
-                lexicon=lex, dict_dir=ddict, data_dir=ddir)
-            model_cfg = sherpa_onnx.OfflineTtsModelConfig(vits=vits_cfg, num_threads=num_threads)
+            # VITS/Matcha/piper 用单个 lexicon.txt + 多音字词表扩展
+            lex = self._resolve_lexicon()
+            if "steps" in model.name or "matcha" in model.name.lower():
+                # Matcha-TTS：acoustic model 加独立 vocoder（vocos/hifigan，官网单独下载）。
+                # 目录内约定 vocoder-*.onnx；缺 vocoder 会 TypeError，显式报错更清晰。
+                # （注意 OfflineTtsModelConfig 的字段是 vits= / matcha=，不是 model=）
+                vocoders = sorted(self.model_dir.glob("vocoder-*.onnx"))
+                if not vocoders:
+                    log.error("Matcha 模型缺 vocoder-*.onnx，请下载（如 vocos-22khz-univ.onnx）放入模型目录")
+                log.info("加载 Matcha-TTS（%s, vocoder=%s）", model.name,
+                         vocoders[0].name if vocoders else "缺失!")
+                # MatchaModelConfig 的绑定签名随轮次不同：某些 aarch64 轮（Nano cp38）
+                # 把 lexicon(带默认值) 排在 tokens(必填) 之前，按关键字传 tokens= 会被拒；
+                # Mac arm64 轮接受关键字。try/except 双保险，位置参数按 C++ 声明顺序。
+                try:
+                    mcfg = sherpa_onnx.OfflineTtsMatchaModelConfig(
+                        acoustic_model=str(model), vocoder=str(vocoders[0]) if vocoders else "",
+                        tokens=str(tokens), lexicon=lex, dict_dir=ddict, data_dir=ddir)
+                except TypeError:
+                    # C++ 顺序：acoustic_model, vocoder, lexicon, tokens, data_dir, dict_dir
+                    mcfg = sherpa_onnx.OfflineTtsMatchaModelConfig(
+                        str(model), str(vocoders[0]) if vocoders else "",
+                        lex, str(tokens), ddir, ddict)
+                model_cfg = sherpa_onnx.OfflineTtsModelConfig(matcha=mcfg, num_threads=num_threads)
+            else:
+                vits_cfg = sherpa_onnx.OfflineTtsVitsModelConfig(
+                    model=str(model), tokens=str(tokens),
+                    lexicon=lex, dict_dir=ddict, data_dir=ddir)
+                model_cfg = sherpa_onnx.OfflineTtsModelConfig(vits=vits_cfg, num_threads=num_threads)
 
         # FST 规则（date/number/phone/new_heteronym）——数字/日期读准。
         # Nano CPU 上前处理极慢故默认关；Mac 上 enable_fst=true 开启。

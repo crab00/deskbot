@@ -126,16 +126,25 @@ class DeskBot:
             log.warning("ASR 加载失败，语音输入不可用: %s", e)
             self.asr = None
         try:
-            from .tts import TTS
-            poly_entries = None
-            if self.cfg.get("tts.polyphone.enabled", False):
-                poly_entries = self.cfg.get("tts.polyphone.entries", {}) or {}
-            self.tts = TTS(self.cfg.path("tts.model_dir"),
-                           num_threads=int(self.cfg.get("tts.num_threads", 2)),
-                           speaker_id=int(self.cfg.get("tts.speaker_id", 0)),
-                           speed=float(self.cfg.get("tts.speed", 1.0)),
-                           enable_fst=bool(self.cfg.get("tts.enable_fst", False)),
-                           poly_entries=poly_entries)
+            engine = str(self.cfg.get("tts.engine", "sherpa"))
+            if engine == "qwen3":
+                # Mac：Qwen3-TTS（mlx-audio Python 常驻子进程，Apple Silicon 专用）
+                from .tts_qwen3 import Qwen3TTSBackend
+                self.tts = Qwen3TTSBackend(
+                    self.cfg.path("tts.model_dir"),
+                    speaker=str(self.cfg.get("tts.speaker", "Vivian")),
+                    language=str(self.cfg.get("tts.language", "zh")))
+            else:
+                from .tts import TTS
+                poly_entries = None
+                if self.cfg.get("tts.polyphone.enabled", False):
+                    poly_entries = self.cfg.get("tts.polyphone.entries", {}) or {}
+                self.tts = TTS(self.cfg.path("tts.model_dir"),
+                               num_threads=int(self.cfg.get("tts.num_threads", 2)),
+                               speaker_id=int(self.cfg.get("tts.speaker_id", 0)),
+                               speed=float(self.cfg.get("tts.speed", 1.0)),
+                               enable_fst=bool(self.cfg.get("tts.enable_fst", False)),
+                               poly_entries=poly_entries)
         except Exception as e:
             log.warning("TTS 加载失败，语音输出不可用: %s", e)
             self.tts = None
@@ -249,11 +258,11 @@ class DeskBot:
     async def run(self) -> None:
         await self.llm_server.start()
         await self._init_geo()
-        # TTS 预热：触发 jieba/拼音/音素一次性初始化（省首个回答 ~0.5-1s）。
-        # 同步等待，避免与首个真实合成并发竞争同一 OfflineTts 实例。
+        # TTS 预热：含数字/日期的短句，一次性触发 jieba/拼音/音素/文本归一化/FST 初始化
+        #（省首个回答 ~0.5-1s）。同步等待，避免与首个真实合成并发竞争同一 OfflineTts 实例。
         if self.voice and self.tts:
             try:
-                await to_thread(self.tts.synthesize, "你好。")
+                await to_thread(self.tts.synthesize, "今天是八月二十八日，温度二十五度。")
                 log.info("TTS 预热完成")
             except Exception as e:
                 log.warning("TTS 预热失败: %s", e)
@@ -269,6 +278,12 @@ class DeskBot:
             await self.llm_server.stop()
             if self.vision:
                 self.vision["camera"].release()
+            # qwen3 后端需显式优雅退出子进程（sherpa 后端无 stop）
+            if getattr(self.tts, "stop", None):
+                try:
+                    self.tts.stop()
+                except Exception as e:
+                    log.warning("TTS 停止失败: %s", e)
             self.store.persist()
 
     def _banner(self) -> None:
@@ -692,6 +707,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--export", action="store_true", help="导出训练集")
     p.add_argument("--memory-add", default=None, metavar="TEXT", help="直接记住一句话")
     p.add_argument("--say", default=None, metavar="TEXT", help="合成并播报一句话")
+    p.add_argument("--say-speaker", type=int, default=None, metavar="SID",
+                   help="--say 时覆写 tts.speaker_id（A/B 试听，不改配置）")
     p.add_argument("--dialogue", action="store_true", help="自动化对话考核（文字层）")
     return p
 
@@ -726,6 +743,9 @@ def main(argv: Optional[List[str]] = None) -> None:
         print(f"已记住: {args.memory_add}")
         return
     if args.say:
+        if args.say_speaker is not None:
+            cfg.set("tts.speaker_id", args.say_speaker)
+            print(f"覆写 tts.speaker_id → {args.say_speaker}")
         asyncio.run(_say(cfg, args.say))
         return
 

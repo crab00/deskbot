@@ -129,6 +129,69 @@ else
   echo "  [跳过] VITS 已就绪"
 fi
 
+echo "== 3b/8 TTS: Kokoro v1.0（中英混合，多说话人，Mac 首选，~311MB）=="
+# 自解压 tarball（含 model.onnx/voices.bin/tokens.txt/lexicon-*.txt/espeak-ng-data/dict/fst）。
+# 复用 ghurl 代理；Mac 主用，Nano 不需要。
+KOKORO_DIR="$MODELS/tts/kokoro-multi-lang-v1_0"
+if [ ! -f "$KOKORO_DIR/model.onnx" ]; then
+  mkdir -p "$KOKORO_DIR"
+  KOKORO_TARBALL="$KOKORO_DIR/kokoro.tar.bz2"
+  KOKORO_URL="$(ghurl "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2")"
+  fetch "Kokoro v1.0" "$KOKORO_URL" "$KOKORO_TARBALL"
+  tar -xjf "$KOKORO_TARBALL" -C "$KOKORO_DIR" --strip-components=1
+  rm -f "$KOKORO_TARBALL"
+  echo "  已解包 Kokoro → $KOKORO_DIR"
+else
+  echo "  [跳过] Kokoro 已就绪"
+fi
+
+echo "== 3c/8 TTS: Matcha-zh（Nano 主用，中文单女声，~96MB + vocoder 52MB）=="
+# matcha 分两件：acoustic tarball（model-steps-3.onnx）+ 独立 vocoder（vocos）。
+# vocoder 放模型目录内（tts.py Matcha 分支按 vocoder-*.onnx 找）。
+MATCHA_DIR="$MODELS/tts/matcha-icefall-zh-baker"
+if [ ! -f "$MATCHA_DIR/model-steps-3.onnx" ]; then
+  mkdir -p "$MATCHA_DIR"
+  MATCHA_TARBALL="$MATCHA_DIR/matcha.tar.bz2"
+  MATCHA_URL="$(ghurl "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/matcha-icefall-zh-baker.tar.bz2")"
+  fetch "Matcha-zh" "$MATCHA_URL" "$MATCHA_TARBALL"
+  tar -xjf "$MATCHA_TARBALL" -C "$MATCHA_DIR" --strip-components=1
+  rm -f "$MATCHA_TARBALL"
+  echo "  已解包 Matcha → $MATCHA_DIR"
+else
+  echo "  [跳过] Matcha 已就绪"
+fi
+if [ ! -f "$MATCHA_DIR/vocoder-vocos.onnx" ]; then
+  V_CODE_URL="$(ghurl "https://github.com/k2-fsa/sherpa-onnx/releases/download/vocoder-models/vocos-22khz-univ.onnx")"
+  fetch "Matcha vocoder(vocos)" "$V_CODE_URL" "$MATCHA_DIR/vocoder-vocos.onnx"
+else
+  echo "  [跳过] Matcha vocoder 已就绪"
+fi
+
+echo "== 3d/8 TTS: Qwen3-TTS（Mac 专用，mlx-audio 参考实现，~1.3GB，可选）=="
+# Mac 主选高质量 TTS：mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit。
+# 注意：用 mlx-community 官方标注的 8bit 转换版（unpruned）——pruned-vocab 变体
+# （AtomGradient/*-pruned-vocab-lite）在 Swift/Python 两种推理路径都不稳定。
+# Apple Silicon 专属（MLX），Nano 不需要。需要 mlx-audio 0.4.3 Python venv（见 TECHNICAL.md）。
+QWEN3_BASE="https://hf-mirror.com/mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit/resolve/main"
+QWEN3_DIR="$MODELS/tts/qwen3-8bit"
+if [ ! -f "$QWEN3_DIR/model.safetensors" ]; then
+  mkdir -p "$QWEN3_DIR/speech_tokenizer"
+  fetch "Qwen3-TTS config.json"          "$QWEN3_BASE/config.json"     "$QWEN3_DIR/config.json" || true
+  fetch "Qwen3-TTS model(1.3GB)"         "$QWEN3_BASE/model.safetensors" "$QWEN3_DIR/model.safetensors" || true
+  fetch "Qwen3-TTS tokens"               "$QWEN3_BASE/tokenizer.json"  "$QWEN3_DIR/tokenizer.json" || true
+  fetch "Qwen3-TTS merges"               "$QWEN3_BASE/merges.txt"      "$QWEN3_DIR/merges.txt" || true
+  fetch "Qwen3-TTS vocab"                "$QWEN3_BASE/vocab.json"      "$QWEN3_DIR/vocab.json" || true
+  fetch "Qwen3-TTS preproc"              "$QWEN3_BASE/preprocessor_config.json" "$QWEN3_DIR/preprocessor_config.json" || true
+  fetch "Qwen3-TTS gen-cfg"              "$QWEN3_BASE/generation_config.json"  "$QWEN3_DIR/generation_config.json" || true
+  fetch "Qwen3-TTS index"                "$QWEN3_BASE/model.safetensors.index.json" "$QWEN3_DIR/model.safetensors.index.json" || true
+  fetch "Qwen3-TTS tok-cfg"              "$QWEN3_BASE/tokenizer_config.json" "$QWEN3_DIR/tokenizer_config.json" || true
+  fetch "Qwen3-TTS ST config"            "$QWEN3_BASE/speech_tokenizer/config.json" "$QWEN3_DIR/speech_tokenizer/config.json" || true
+  fetch "Qwen3-TTS ST model"             "$QWEN3_BASE/speech_tokenizer/model.safetensors" "$QWEN3_DIR/speech_tokenizer/model.safetensors" || true
+  [ -s "$QWEN3_DIR/model.safetensors" ] && echo "  已下载 Qwen3-TTS(8bit) → $QWEN3_DIR" || echo "  [警告] Qwen3-TTS 下载不完整，可稍后重跑本脚本（Mac 可继续用其他 TTS）"
+else
+  echo "  [跳过] Qwen3-TTS(8bit) 已就绪"
+fi
+
 # VAD: 用 sherpa-onnx 官方的 silero_vad.onnx（x/h/c 格式，经测试可靠）。
 # 不要用 snakers4/silero-vad 的 v5 导出（带 sr 输入，且有坏 LSTM 分支）。
 echo "== 4/8 VAD: Silero（sherpa 官方版，~628KB）=="
@@ -221,6 +284,9 @@ for f in "$MODELS/llm/Qwen3-0.6B-Q8_0.gguf" \
          "$MODELS/llm/qwen2.5-1.5b-instruct-q4_k_m.gguf" \
          "$MODELS/asr/sense-voice-zh/tokens.txt" \
          "$MODELS/tts/vits-zh-ll/model.onnx" \
+         "$MODELS/tts/kokoro-multi-lang-v1_0/model.onnx" \
+         "$MODELS/tts/matcha-icefall-zh-baker/model-steps-3.onnx" \
+         "$MODELS/tts/matcha-icefall-zh-baker/vocoder-vocos.onnx" \
          "$MODELS/vad/silero_vad.onnx" \
          "$MODELS/kws/wenetspeech-3.3M/tokens.txt" \
          "$ROOT/third_party/llama-server.linux-aarch64"; do

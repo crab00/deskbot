@@ -18,6 +18,11 @@ rsync -avz --progress \
   --exclude '__pycache__/' \
   --exclude '*.pyc' \
   --exclude 'config.yaml' \
+  --exclude 'models/tts/qwen3-tts/' \
+  --exclude 'models/tts/kokoro-multi-lang-v1_0/' \
+  --exclude 'models/tts/kokoro.tar.bz2' \
+  --exclude 'deskbot/tts_qwen3.py' \
+  --exclude 'deskbot/tts_qwen3_server.py' \
   ./ "$DEST"
 
 echo "完成。接下来在 Nano 上："
